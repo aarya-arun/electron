@@ -13,7 +13,6 @@ namespace electron {
 namespace api {
 
 Button::Button(views::Button* impl) : View(impl) {
-  view()->set_owned_by_client();
   // Make the button focusable as per the platform.
   button()->SetFocusForPlatform();
 }
@@ -33,7 +32,7 @@ gin_helper::WrappableBase* Button::New(gin_helper::Arguments* args) {
 // static
 void Button::BuildPrototype(v8::Isolate* isolate,
                             v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin_helper::StringTov8(isolate, "Button"));
+  prototype->SetClassName(gin::StringToV8(isolate, "Button"));
 }
 
 }  // namespace api

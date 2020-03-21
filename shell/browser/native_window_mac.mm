@@ -16,8 +16,11 @@
 #include "base/mac/scoped_cftyperef.h"
 #include "base/numerics/ranges.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/task/post_task.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "content/public/browser/browser_accessibility_state.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "shell/browser/native_browser_view_mac.h"
 #include "shell/browser/ui/cocoa/electron_native_widget_mac.h"
@@ -44,13 +47,13 @@
 // This view would inform Chromium to resize the hosted views::View.
 //
 // The overrided methods should behave the same with BridgedContentView.
-@interface ElectronAdapatedContentView : NSView {
+@interface ElectronAdaptedContentView : NSView {
  @private
   views::NativeWidgetMacNSWindowHost* bridge_host_;
 }
 @end
 
-@implementation ElectronAdapatedContentView
+@implementation ElectronAdaptedContentView
 
 - (id)initWithShell:(electron::NativeWindowMac*)shell {
   if ((self = [self init])) {
@@ -324,6 +327,8 @@ void ViewDidMoveToSuperview(NSView* self, SEL _cmd) {
 NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
                                  NativeWindow* parent)
     : NativeWindow(options, parent), root_view_(new RootViewMac(this)) {
+  ui::NativeTheme::GetInstanceForNativeUi()->AddObserver(this);
+
   int width = 800, height = 600;
   options.Get(options::kWidth, &width);
   options.Get(options::kHeight, &height);
@@ -509,14 +514,20 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
 }
 
 NativeWindowMac::~NativeWindowMac() {
+  ui::NativeTheme::GetInstanceForNativeUi()->RemoveObserver(this);
   if (wheel_event_monitor_)
     [NSEvent removeMonitor:wheel_event_monitor_];
 }
 
-void NativeWindowMac::RepositionTrafficLights() {
+void NativeWindowMac::RedrawTrafficLights() {
+  // Ensure maximizable options retain pre-existing state.
+  SetMaximizable(maximizable_);
+
   if (!traffic_light_position_.x() && !traffic_light_position_.y()) {
     return;
   }
+  if (IsFullscreen())
+    return;
 
   NSWindow* window = window_;
   NSButton* close = [window standardWindowButton:NSWindowCloseButton];
@@ -588,7 +599,14 @@ void NativeWindowMac::SetContentView(views::View* view) {
 void NativeWindowMac::Close() {
   // When this is a sheet showing, performClose won't work.
   if (is_modal() && parent() && IsVisible()) {
-    [parent()->GetNativeWindow().GetNativeNSWindow() endSheet:window_];
+    NSWindow* window = parent()->GetNativeWindow().GetNativeNSWindow();
+    if (NSWindow* sheetParent = [window sheetParent]) {
+      base::ThreadTaskRunnerHandle::Get()->PostTask(
+          FROM_HERE, base::BindOnce(base::RetainBlock(^{
+            [sheetParent endSheet:window];
+          })));
+    }
+
     // Manually emit close event (not triggered from close fn)
     NotifyWindowCloseButtonClicked();
     CloseImmediately();
@@ -689,6 +707,12 @@ bool NativeWindowMac::IsVisible() {
 
 void NativeWindowMac::SetExitingFullScreen(bool flag) {
   exiting_fullscreen_ = flag;
+}
+
+void NativeWindowMac::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
+  base::PostTask(FROM_HERE, {content::BrowserThread::UI},
+                 base::BindOnce(&NativeWindowMac::RedrawTrafficLights,
+                                base::Unretained(this)));
 }
 
 bool NativeWindowMac::IsEnabled() {
@@ -909,6 +933,7 @@ bool NativeWindowMac::IsMinimizable() {
 }
 
 void NativeWindowMac::SetMaximizable(bool maximizable) {
+  maximizable_ = maximizable;
   [[window_ standardWindowButton:NSWindowZoomButton] setEnabled:maximizable];
 }
 
@@ -988,8 +1013,7 @@ void NativeWindowMac::SetWindowLevel(int unbounded_level) {
 
   // Set level will make the zoom button revert to default, probably
   // a bug of Cocoa or macOS.
-  [[window_ standardWindowButton:NSWindowZoomButton]
-      setEnabled:was_maximizable_];
+  SetMaximizable(was_maximizable_);
 
   // This must be notified at the very end or IsAlwaysOnTop
   // will not yet have been updated to reflect the new status
@@ -1013,7 +1037,7 @@ void NativeWindowMac::Invalidate() {
 void NativeWindowMac::SetTitle(const std::string& title) {
   [window_ setTitle:base::SysUTF8ToNSString(title)];
   if (title_bar_style_ == TitleBarStyle::HIDDEN) {
-    RepositionTrafficLights();
+    RedrawTrafficLights();
   }
 }
 
@@ -1531,6 +1555,15 @@ void NativeWindowMac::SetVibrancy(const std::string& type) {
     [effect_view setMaterial:vibrancyType];
 }
 
+void NativeWindowMac::SetTrafficLightPosition(const gfx::Point& position) {
+  traffic_light_position_ = position;
+  RedrawTrafficLights();
+}
+
+gfx::Point NativeWindowMac::GetTrafficLightPosition() const {
+  return traffic_light_position_;
+}
+
 void NativeWindowMac::SetTouchBar(
     std::vector<gin_helper::PersistentDictionary> items) {
   if (@available(macOS 10.12.2, *)) {
@@ -1653,7 +1686,7 @@ void NativeWindowMac::AddContentViewLayers(bool minimizable, bool closable) {
     // Some third-party macOS utilities check the zoom button's enabled state to
     // determine whether to show custom UI on hover, so we disable it here to
     // prevent them from doing so in a frameless app window.
-    [[window_ standardWindowButton:NSWindowZoomButton] setEnabled:NO];
+    SetMaximizable(false);
   }
 }
 
@@ -1692,7 +1725,7 @@ void NativeWindowMac::OverrideNSWindowContentView() {
   // content view with a simple NSView.
   if (has_frame()) {
     container_view_.reset(
-        [[ElectronAdapatedContentView alloc] initWithShell:this]);
+        [[ElectronAdaptedContentView alloc] initWithShell:this]);
   } else {
     container_view_.reset([[FullSizeContentView alloc] init]);
     [container_view_ setFrame:[[[window_ contentView] superview] bounds]];

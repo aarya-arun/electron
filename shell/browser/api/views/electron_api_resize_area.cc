@@ -12,9 +12,7 @@ namespace electron {
 
 namespace api {
 
-ResizeArea::ResizeArea() : View(new views::ResizeArea(this)) {
-  view()->set_owned_by_client();
-}
+ResizeArea::ResizeArea() : View(new views::ResizeArea(this)) {}
 
 ResizeArea::~ResizeArea() {}
 
@@ -26,14 +24,14 @@ void ResizeArea::OnResize(int resize_amount, bool done_resizing) {
 gin_helper::WrappableBase* ResizeArea::New(gin_helper::Arguments* args) {
   // Constructor call.
   auto* view = new ResizeArea();
-  view->InitWith(args->isolate(), args->GetThis());
+  view->InitWithArgs(args);
   return view;
 }
 
 // static
 void ResizeArea::BuildPrototype(v8::Isolate* isolate,
                                 v8::Local<v8::FunctionTemplate> prototype) {
-  prototype->SetClassName(gin_helper::StringTov8(isolate, "ResizeArea"));
+  prototype->SetClassName(gin::StringToV8(isolate, "ResizeArea"));
 }
 
 }  // namespace api
