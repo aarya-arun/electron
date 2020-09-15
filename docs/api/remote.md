@@ -4,6 +4,16 @@
 
 Process: [Renderer](../glossary.md#renderer-process)
 
+> ⚠️ WARNING ⚠️
+> The `remote` module is [deprecated](https://github.com/electron/electron/issues/21408).
+> Instead of `remote`, use [`ipcRenderer`](ipc-renderer.md) and
+> [`ipcMain`](ipc-main.md).
+>
+> Read more about why the `remote` module is deprecated [here](https://medium.com/@nornagon/electrons-remote-module-considered-harmful-70d69500f31).
+>
+> If you still want to use `remote` despite the performance and security
+> concerns, see [@electron/remote](https://github.com/electron/remote).
+
 The `remote` module provides a simple way to do inter-process communication
 (IPC) between the renderer process (web page) and the main process.
 
@@ -17,7 +27,7 @@ renderer process:
 
 ```javascript
 const { BrowserWindow } = require('electron').remote
-let win = new BrowserWindow({ width: 800, height: 600 })
+const win = new BrowserWindow({ width: 800, height: 600 })
 win.loadURL('https://github.com')
 ```
 

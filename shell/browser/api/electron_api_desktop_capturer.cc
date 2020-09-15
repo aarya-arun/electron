@@ -15,6 +15,7 @@
 #include "chrome/browser/media/webrtc/window_icon_util.h"
 #include "content/public/browser/desktop_capture.h"
 #include "gin/object_template_builder.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/common/api/electron_api_native_image.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
@@ -49,6 +50,8 @@ struct Converter<electron::api::DesktopCapturer::Source> {
           "appIcon",
           electron::api::NativeImage::Create(
               isolate, gfx::Image(GetWindowIcon(source.media_list_source.id))));
+    } else {
+      dict.Set("appIcon", nullptr);
     }
     return ConvertToV8(isolate, dict);
   }
@@ -155,6 +158,9 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
       // |media_list_sources|.
       if (!webrtc::DxgiDuplicatorController::Instance()->GetDeviceNames(
               &device_names)) {
+        v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+        v8::Locker locker(isolate);
+        v8::HandleScope scope(isolate);
         gin_helper::CallMethod(this, "_onerror", "Failed to get sources.");
         return;
       }
@@ -171,7 +177,7 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
         source.display_id = base::NumberToString(device_id);
       }
     }
-#elif defined(OS_MACOSX)
+#elif defined(OS_MAC)
     // On Mac, the IDs across the APIs match.
     for (auto& source : screen_sources) {
       source.display_id = base::NumberToString(source.media_list_source.id.id);
@@ -184,9 +190,12 @@ void DesktopCapturer::UpdateSourcesList(DesktopMediaList* list) {
               std::back_inserter(captured_sources_));
   }
 
-  if (!capture_window_ && !capture_screen_)
-    gin_helper::CallMethod(this, "_onfinished", captured_sources_,
-                           fetch_window_icons_);
+  if (!capture_window_ && !capture_screen_) {
+    v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+    v8::Locker locker(isolate);
+    v8::HandleScope scope(isolate);
+    gin_helper::CallMethod(this, "_onfinished", captured_sources_);
+  }
 }
 
 // static

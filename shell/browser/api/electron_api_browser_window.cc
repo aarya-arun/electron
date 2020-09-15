@@ -12,12 +12,12 @@
 #include "content/browser/web_contents/web_contents_impl.h"  // nogncheck
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "shell/browser/api/electron_api_web_contents_view.h"
 #include "shell/browser/browser.h"
 #include "shell/browser/unresponsive_suppressor.h"
 #include "shell/browser/web_contents_preferences.h"
 #include "shell/browser/window_list.h"
 #include "shell/common/color_util.h"
-#include "shell/common/gin_converters/value_converter.h"
 #include "shell/common/gin_helper/constructor.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
@@ -31,9 +31,7 @@ namespace api {
 
 BrowserWindow::BrowserWindow(gin::Arguments* args,
                              const gin_helper::Dictionary& options)
-    : TopLevelWindow(args->isolate(), options), weak_factory_(this) {
-  gin::Handle<class WebContents> web_contents;
-
+    : BaseWindow(args->isolate(), options), weak_factory_(this) {
   // Use options.webPreferences in WebContents.
   v8::Isolate* isolate = args->isolate();
   gin_helper::Dictionary web_preferences =
@@ -60,30 +58,27 @@ BrowserWindow::BrowserWindow(gin::Arguments* args,
     web_preferences.Set(options::kShow, show);
   }
 
-  if (options.Get("webContents", &web_contents) && !web_contents.IsEmpty()) {
-    // Set webPreferences from options if using an existing webContents.
-    // These preferences will be used when the webContent launches new
-    // render processes.
-    auto* existing_preferences =
-        WebContentsPreferences::From(web_contents->web_contents());
-    base::DictionaryValue web_preferences_dict;
-    if (gin::ConvertFromV8(isolate, web_preferences.GetHandle(),
-                           &web_preferences_dict)) {
-      existing_preferences->Clear();
-      existing_preferences->Merge(web_preferences_dict);
-    }
-  } else {
-    // Creates the WebContents used by BrowserWindow.
-    web_contents = WebContents::Create(isolate, web_preferences);
+  // Copy the webContents option to webPreferences. This is only used internally
+  // to implement nativeWindowOpen option.
+  if (options.Get("webContents", &value)) {
+    web_preferences.SetHidden("webContents", value);
   }
 
+  // Creates the WebContentsView.
+  gin::Handle<WebContentsView> web_contents_view =
+      WebContentsView::Create(isolate, web_preferences);
+  DCHECK(web_contents_view.get());
+
+  // Save a reference of the WebContents.
+  gin::Handle<WebContents> web_contents =
+      web_contents_view->GetWebContents(isolate);
   web_contents_.Reset(isolate, web_contents.ToV8());
   api_web_contents_ = web_contents->GetWeakPtr();
   api_web_contents_->AddObserver(this);
   Observe(api_web_contents_->web_contents());
 
   // Keep a copy of the options for later use.
-  gin_helper::Dictionary(isolate, web_contents->GetWrapper())
+  gin_helper::Dictionary(isolate, web_contents.ToV8().As<v8::Object>())
       .Set("browserWindowOptions", options);
 
   // Associate with BrowserWindow.
@@ -95,7 +90,10 @@ BrowserWindow::BrowserWindow(gin::Arguments* args,
 
   InitWithArgs(args);
 
-#if defined(OS_MACOSX)
+  // Install the content view after BaseWindow's JS code is initialized.
+  SetContentView(gin::CreateHandle<View>(isolate, web_contents_view.get()));
+
+#if defined(OS_MAC)
   OverrideNSWindowContentView(web_contents->managed_web_contents());
 #endif
 
@@ -108,16 +106,16 @@ BrowserWindow::~BrowserWindow() {
   if (api_web_contents_)
     api_web_contents_->RemoveObserver(this);
   // Note that the OnWindowClosed will not be called after the destructor runs,
-  // since the window object is managed by the TopLevelWindow class.
+  // since the window object is managed by the BaseWindow class.
   if (web_contents())
     Cleanup();
 }
 
 void BrowserWindow::OnInputEvent(const blink::WebInputEvent& event) {
   switch (event.GetType()) {
-    case blink::WebInputEvent::kGestureScrollBegin:
-    case blink::WebInputEvent::kGestureScrollUpdate:
-    case blink::WebInputEvent::kGestureScrollEnd:
+    case blink::WebInputEvent::Type::kGestureScrollBegin:
+    case blink::WebInputEvent::Type::kGestureScrollUpdate:
+    case blink::WebInputEvent::Type::kGestureScrollEnd:
       Emit("scroll-touch-edge");
       break;
     default:
@@ -212,7 +210,7 @@ void BrowserWindow::OnCloseContents() {
   window_unresponsive_closure_.Cancel();
 }
 
-void BrowserWindow::OnRendererResponsive() {
+void BrowserWindow::OnRendererResponsive(content::RenderProcessHost*) {
   window_unresponsive_closure_.Cancel();
   Emit("responsive");
 }
@@ -230,7 +228,7 @@ void BrowserWindow::OnSetContentBounds(const gfx::Rect& rect) {
 
 void BrowserWindow::OnActivateContents() {
   // Hide the auto-hide menu when webContents is focused.
-#if !defined(OS_MACOSX)
+#if !defined(OS_MAC)
   if (IsMenuBarAutoHide() && IsMenuBarVisible())
     window()->SetMenuBarVisibility(false);
 #endif
@@ -268,56 +266,63 @@ void BrowserWindow::OnCloseButtonClicked(bool* prevent_default) {
     // Already closed by renderer
     return;
 
-  if (web_contents()->NeedToFireBeforeUnloadOrUnload())
+  // Required to make beforeunload handler work.
+  api_web_contents_->NotifyUserActivation();
+
+  if (web_contents()->NeedToFireBeforeUnloadOrUnloadEvents())
     web_contents()->DispatchBeforeUnload(false /* auto_cancel */);
   else
     web_contents()->Close();
 }
 
 void BrowserWindow::OnWindowClosed() {
+  // We need to reset the browser views before we call Cleanup, because the
+  // browser views are child views of the main web contents view, which will be
+  // deleted by Cleanup.
+  BaseWindow::ResetBrowserViews();
   Cleanup();
-  // See TopLevelWindow::OnWindowClosed on why calling InvalidateWeakPtrs.
+  // See BaseWindow::OnWindowClosed on why calling InvalidateWeakPtrs.
   weak_factory_.InvalidateWeakPtrs();
-  TopLevelWindow::OnWindowClosed();
+  BaseWindow::OnWindowClosed();
 }
 
 void BrowserWindow::OnWindowBlur() {
   web_contents()->StoreFocus();
-#if defined(OS_MACOSX)
-  auto* rwhv = web_contents()->GetRenderWidgetHostView();
-  if (rwhv)
-    rwhv->SetActive(false);
-#endif
 
-  TopLevelWindow::OnWindowBlur();
+  BaseWindow::OnWindowBlur();
 }
 
 void BrowserWindow::OnWindowFocus() {
   web_contents()->RestoreFocus();
-#if defined(OS_MACOSX)
-  auto* rwhv = web_contents()->GetRenderWidgetHostView();
-  if (rwhv)
-    rwhv->SetActive(true);
-#else
+
+#if !defined(OS_MAC)
   if (!api_web_contents_->IsDevToolsOpened())
     web_contents()->Focus();
 #endif
 
-  TopLevelWindow::OnWindowFocus();
+  BaseWindow::OnWindowFocus();
+}
+
+void BrowserWindow::OnWindowIsKeyChanged(bool is_key) {
+#if defined(OS_MAC)
+  auto* rwhv = web_contents()->GetRenderWidgetHostView();
+  if (rwhv)
+    rwhv->SetActive(is_key);
+#endif
 }
 
 void BrowserWindow::OnWindowResize() {
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
   if (!draggable_regions_.empty())
     UpdateDraggableRegions(draggable_regions_);
 #endif
-  TopLevelWindow::OnWindowResize();
+  BaseWindow::OnWindowResize();
 }
 
 void BrowserWindow::OnWindowLeaveFullScreen() {
-  TopLevelWindow::OnWindowLeaveFullScreen();
-#if defined(OS_MACOSX)
-  if (web_contents()->IsFullscreenForCurrentTab())
+  BaseWindow::OnWindowLeaveFullScreen();
+#if defined(OS_MAC)
+  if (web_contents()->IsFullscreen())
     web_contents()->ExitFullscreen(true);
 #endif
 }
@@ -326,18 +331,18 @@ void BrowserWindow::Focus() {
   if (api_web_contents_->IsOffScreen())
     FocusOnWebView();
   else
-    TopLevelWindow::Focus();
+    BaseWindow::Focus();
 }
 
 void BrowserWindow::Blur() {
   if (api_web_contents_->IsOffScreen())
     BlurWebView();
   else
-    TopLevelWindow::Blur();
+    BaseWindow::Blur();
 }
 
 void BrowserWindow::SetBackgroundColor(const std::string& color_name) {
-  TopLevelWindow::SetBackgroundColor(color_name);
+  BaseWindow::SetBackgroundColor(color_name);
   auto* view = web_contents()->GetRenderWidgetHostView();
   if (view)
     view->SetBackgroundColor(ParseHexColor(color_name));
@@ -354,30 +359,30 @@ void BrowserWindow::SetBackgroundColor(const std::string& color_name) {
 }
 
 void BrowserWindow::SetBrowserView(v8::Local<v8::Value> value) {
-  TopLevelWindow::ResetBrowserViews();
-  TopLevelWindow::AddBrowserView(value);
-#if defined(OS_MACOSX)
+  BaseWindow::ResetBrowserViews();
+  BaseWindow::AddBrowserView(value);
+#if defined(OS_MAC)
   UpdateDraggableRegions(draggable_regions_);
 #endif
 }
 
 void BrowserWindow::AddBrowserView(v8::Local<v8::Value> value) {
-  TopLevelWindow::AddBrowserView(value);
-#if defined(OS_MACOSX)
+  BaseWindow::AddBrowserView(value);
+#if defined(OS_MAC)
   UpdateDraggableRegions(draggable_regions_);
 #endif
 }
 
 void BrowserWindow::RemoveBrowserView(v8::Local<v8::Value> value) {
-  TopLevelWindow::RemoveBrowserView(value);
-#if defined(OS_MACOSX)
+  BaseWindow::RemoveBrowserView(value);
+#if defined(OS_MAC)
   UpdateDraggableRegions(draggable_regions_);
 #endif
 }
 
 void BrowserWindow::ResetBrowserViews() {
-  TopLevelWindow::ResetBrowserViews();
-#if defined(OS_MACOSX)
+  BaseWindow::ResetBrowserViews();
+#if defined(OS_MAC)
   UpdateDraggableRegions(draggable_regions_);
 #endif
 }
@@ -396,7 +401,7 @@ void BrowserWindow::SetVibrancy(v8::Isolate* isolate,
           type.empty() ? !window_->transparent() : false);
   }
 
-  TopLevelWindow::SetVibrancy(isolate, value);
+  BaseWindow::SetVibrancy(isolate, value);
 }
 
 void BrowserWindow::FocusOnWebView() {
@@ -463,12 +468,12 @@ void BrowserWindow::Cleanup() {
 
 void BrowserWindow::OnWindowShow() {
   web_contents()->WasShown();
-  TopLevelWindow::OnWindowShow();
+  BaseWindow::OnWindowShow();
 }
 
 void BrowserWindow::OnWindowHide() {
   web_contents()->WasOccluded();
-  TopLevelWindow::OnWindowHide();
+  BaseWindow::OnWindowHide();
 }
 
 // static
@@ -519,8 +524,8 @@ v8::Local<v8::Value> BrowserWindow::From(v8::Isolate* isolate,
 
 namespace {
 
+using electron::api::BaseWindow;
 using electron::api::BrowserWindow;
-using electron::api::TopLevelWindow;
 
 void Initialize(v8::Local<v8::Object> exports,
                 v8::Local<v8::Value> unused,

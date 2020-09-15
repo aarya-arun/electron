@@ -1,16 +1,15 @@
 import * as cp from 'child_process';
 import * as path from 'path';
 import { expect } from 'chai';
-import { BrowserWindow, Menu, MenuItem } from 'electron';
+import { BrowserWindow, Menu, MenuItem } from 'electron/main';
 import { sortMenuItems } from '../lib/browser/api/menu-utils';
 import { emittedOnce } from './events-helpers';
-import { ifit } from './spec-helpers';
+import { ifit, delay } from './spec-helpers';
 import { closeWindow } from './window-helpers';
 
 const fixturesPath = path.resolve(__dirname, 'fixtures');
 
 describe('Menu module', function () {
-  this.timeout(5000);
   describe('Menu.buildFromTemplate', () => {
     it('should be able to attach extra fields', () => {
       const menu = Menu.buildFromTemplate([
@@ -86,10 +85,17 @@ describe('Menu module', function () {
         Menu.buildFromTemplate([{ visible: true }]);
       }).to.throw(/Invalid template for MenuItem: must have at least one of label, role or type/);
     });
+
     it('does throw exception for undefined', () => {
       expect(() => {
         Menu.buildFromTemplate([undefined as any]);
       }).to.throw(/Invalid template for MenuItem: must have at least one of label, role or type/);
+    });
+
+    it('throws when an non-array is passed as a template', () => {
+      expect(() => {
+        Menu.buildFromTemplate('hello' as any);
+      }).to.throw(/Invalid template for Menu: Menu template must be an array/);
     });
 
     describe('Menu sorting and building', () => {
@@ -830,29 +836,29 @@ describe('Menu module', function () {
       });
     });
 
-    it('prevents menu from getting garbage-collected when popuping', (done) => {
+    it('prevents menu from getting garbage-collected when popuping', async () => {
       const menu = Menu.buildFromTemplate([{ role: 'paste' }]);
       menu.popup({ window: w });
 
       // Keep a weak reference to the menu.
-      const v8Util = process.electronBinding('v8_util');
-      const map = v8Util.createIDWeakMap<Electron.Menu>();
-      map.set(0, menu);
+      // eslint-disable-next-line no-undef
+      const wr = new (globalThis as any).WeakRef(menu);
 
-      setTimeout(() => {
-        // Do garbage collection, since |menu| is not referenced in this closure
-        // it would be gone after next call.
-        v8Util.requestGarbageCollectionForTesting();
-        setTimeout(() => {
-          // Try to receive menu from weak reference.
-          if (map.has(0)) {
-            map.get(0)!.closePopup();
-            done();
-          } else {
-            done('Menu is garbage-collected while popuping');
-          }
-        });
-      });
+      await delay();
+
+      // Do garbage collection, since |menu| is not referenced in this closure
+      // it would be gone after next call.
+      const v8Util = process._linkedBinding('electron_common_v8_util');
+      v8Util.requestGarbageCollectionForTesting();
+
+      await delay();
+
+      // Try to receive menu from weak reference.
+      if (wr.deref()) {
+        wr.deref().closePopup();
+      } else {
+        throw new Error('Menu is garbage-collected while popuping');
+      }
     });
   });
 
@@ -878,9 +884,14 @@ describe('Menu module', function () {
       const appProcess = cp.spawn(process.execPath, [appPath]);
 
       let output = '';
-      appProcess.stdout.on('data', data => { output += data; });
-
-      await emittedOnce(appProcess, 'exit');
+      await new Promise((resolve) => {
+        appProcess.stdout.on('data', data => {
+          output += data;
+          if (data.indexOf('Window has') > -1) {
+            resolve();
+          }
+        });
+      });
       expect(output).to.include('Window has no menu');
     });
 

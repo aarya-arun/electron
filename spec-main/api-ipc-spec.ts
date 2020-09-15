@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events';
 import { expect } from 'chai';
-import { BrowserWindow, ipcMain, IpcMainInvokeEvent, MessageChannelMain } from 'electron';
+import { BrowserWindow, ipcMain, IpcMainInvokeEvent, MessageChannelMain } from 'electron/main';
 import { closeAllWindows } from './window-helpers';
 import { emittedOnce } from './events-helpers';
 
-const v8Util = process.electronBinding('v8_util');
+const v8Util = process._linkedBinding('electron_common_v8_util');
 
 describe('ipc module', () => {
   describe('invoke', () => {
@@ -44,7 +44,7 @@ describe('ipc module', () => {
     it('receives a response from an asynchronous handler', async () => {
       ipcMain.handleOnce('test', async (e: IpcMainInvokeEvent, arg: number) => {
         expect(arg).to.equal(123);
-        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(setImmediate);
         return 3;
       });
       const done = new Promise(resolve => ipcMain.once('result', (e, arg) => {
@@ -69,7 +69,7 @@ describe('ipc module', () => {
 
     it('receives an error from an asynchronous handler', async () => {
       ipcMain.handleOnce('test', async () => {
-        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(setImmediate);
         throw new Error('some error');
       });
       const done = new Promise(resolve => ipcMain.once('result', (e, arg) => {
@@ -307,7 +307,7 @@ describe('ipc module', () => {
             await new Promise(resolve => {
               port2.start();
               (port2 as any).onclose = resolve;
-              process.electronBinding('v8_util').requestGarbageCollectionForTesting();
+              process._linkedBinding('electron_common_v8_util').requestGarbageCollectionForTesting();
             });
           }})()`);
         });

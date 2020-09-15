@@ -1,9 +1,10 @@
 import { expect } from 'chai';
-import { net, session, ClientRequest, BrowserWindow } from 'electron';
+import { net, session, ClientRequest, BrowserWindow } from 'electron/main';
 import * as http from 'http';
 import * as url from 'url';
 import { AddressInfo, Socket } from 'net';
 import { emittedOnce } from './events-helpers';
+import { defer } from './spec-helpers';
 
 const kOneKiloByte = 1024;
 const kOneMegaByte = kOneKiloByte * kOneKiloByte;
@@ -20,13 +21,6 @@ function randomBuffer (size: number, start: number = 0, end: number = 255) {
 function randomString (length: number) {
   const buffer = randomBuffer(length, '0'.charCodeAt(0), 'z'.charCodeAt(0));
   return buffer.toString();
-}
-
-const cleanupTasks: (() => void)[] = [];
-
-function cleanUp () {
-  cleanupTasks.forEach(t => t());
-  cleanupTasks.length = 0;
 }
 
 async function getResponse (urlRequest: Electron.ClientRequest) {
@@ -70,7 +64,7 @@ function respondNTimes (fn: http.RequestListener, n: number): Promise<string> {
     });
     const sockets: Socket[] = [];
     server.on('connection', s => sockets.push(s));
-    cleanupTasks.push(() => {
+    defer(() => {
       server.close();
       sockets.forEach(s => s.destroy());
     });
@@ -118,7 +112,6 @@ describe('net module', () => {
   beforeEach(() => {
     routeFailure = false;
   });
-  afterEach(cleanUp);
   afterEach(async function () {
     await session.defaultSession.clearCache();
     if (routeFailure && this.test) {
@@ -530,7 +523,7 @@ describe('net module', () => {
         session: sess
       });
       const response = await getResponse(urlRequest);
-      expect(response.headers['x-cookie']).to.equal(`undefined`);
+      expect(response.headers['x-cookie']).to.equal('undefined');
     });
 
     it('should be able to use the sessions cookie store', async () => {
@@ -582,7 +575,8 @@ describe('net module', () => {
         path: '/',
         secure: false,
         httpOnly: false,
-        session: true
+        session: true,
+        sameSite: 'unspecified'
       });
     });
 
@@ -616,7 +610,8 @@ describe('net module', () => {
           path: '/',
           secure: false,
           httpOnly: false,
-          session: true
+          session: true,
+          sameSite: mode.toLowerCase()
         });
         const urlRequest2 = net.request({
           url: serverUrl,
@@ -1206,7 +1201,7 @@ describe('net module', () => {
         response.end();
       });
       const netRequest = net.request({ url: serverUrl, method: 'POST' });
-      expect(netRequest.getUploadProgress()).to.deep.equal({ active: false });
+      expect(netRequest.getUploadProgress()).to.have.property('active', false);
       netRequest.end(Buffer.from('hello'));
       const [position, total] = await emittedOnce(netRequest, 'upload-progress');
       expect(netRequest.getUploadProgress()).to.deep.equal({ active: true, started: true, current: position, total });
@@ -1250,6 +1245,38 @@ describe('net module', () => {
         });
         setTimeout(resolve, 50);
       });
+    });
+
+    it('should remove the referer header when no referrer url specified', async () => {
+      const serverUrl = await respondOnce.toSingleURL((request, response) => {
+        expect(request.headers.referer).to.equal(undefined);
+        response.statusCode = 200;
+        response.statusMessage = 'OK';
+        response.end();
+      });
+      const urlRequest = net.request(serverUrl);
+      urlRequest.end();
+
+      const response = await getResponse(urlRequest);
+      expect(response.statusCode).to.equal(200);
+      await collectStreamBody(response);
+    });
+
+    it('should set the referer header when a referrer url specified', async () => {
+      const referrerURL = 'https://www.electronjs.org/';
+      const serverUrl = await respondOnce.toSingleURL((request, response) => {
+        expect(request.headers.referer).to.equal(referrerURL);
+        response.statusCode = 200;
+        response.statusMessage = 'OK';
+        response.end();
+      });
+      const urlRequest = net.request(serverUrl);
+      urlRequest.setHeader('referer', referrerURL);
+      urlRequest.end();
+
+      const response = await getResponse(urlRequest);
+      expect(response.statusCode).to.equal(200);
+      await collectStreamBody(response);
     });
   });
 
@@ -1372,7 +1399,7 @@ describe('net module', () => {
     it('should free unreferenced, never-started request objects without crash', (done) => {
       net.request('https://test');
       process.nextTick(() => {
-        const v8Util = process.electronBinding('v8_util');
+        const v8Util = process._linkedBinding('electron_common_v8_util');
         v8Util.requestGarbageCollectionForTesting();
         done();
       });
@@ -1391,7 +1418,7 @@ describe('net module', () => {
       const response = await getResponse(urlRequest);
       process.nextTick(() => {
         // Trigger a garbage collection.
-        const v8Util = process.electronBinding('v8_util');
+        const v8Util = process._linkedBinding('electron_common_v8_util');
         v8Util.requestGarbageCollectionForTesting();
         finishResponse!();
       });
@@ -1404,7 +1431,7 @@ describe('net module', () => {
       });
       const urlRequest = net.request(serverUrl);
       process.nextTick(() => {
-        const v8Util = process.electronBinding('v8_util');
+        const v8Util = process._linkedBinding('electron_common_v8_util');
         v8Util.requestGarbageCollectionForTesting();
       });
       const response = await getResponse(urlRequest);
@@ -1420,7 +1447,7 @@ describe('net module', () => {
       const urlRequest = net.request(serverUrl);
       urlRequest.on('close', () => {
         process.nextTick(() => {
-          const v8Util = process.electronBinding('v8_util');
+          const v8Util = process._linkedBinding('electron_common_v8_util');
           v8Util.requestGarbageCollectionForTesting();
         });
       });
@@ -1441,7 +1468,7 @@ describe('net module', () => {
       const response = await getResponse(urlRequest);
       await collectStreamBody(response);
       process.nextTick(() => {
-        const v8Util = process.electronBinding('v8_util');
+        const v8Util = process._linkedBinding('electron_common_v8_util');
         v8Util.requestGarbageCollectionForTesting();
       });
     });
@@ -1455,7 +1482,7 @@ describe('net module', () => {
       const urlRequest = net.request(serverUrl);
       urlRequest.chunkedEncoding = true;
       urlRequest.write(randomBuffer(kOneMegaByte));
-      const v8Util = process.electronBinding('v8_util');
+      const v8Util = process._linkedBinding('electron_common_v8_util');
       v8Util.requestGarbageCollectionForTesting();
       await collectStreamBody(await getResponse(urlRequest));
     });
@@ -1469,7 +1496,7 @@ describe('net module', () => {
       const urlRequest = net.request(serverUrl);
       urlRequest.on('close', () => {
         process.nextTick(() => {
-          const v8Util = process.electronBinding('v8_util');
+          const v8Util = process._linkedBinding('electron_common_v8_util');
           v8Util.requestGarbageCollectionForTesting();
         });
       });
@@ -1486,7 +1513,7 @@ describe('net module', () => {
       const urlRequest = net.request(serverUrl);
       urlRequest.on('close', () => {
         process.nextTick(() => {
-          const v8Util = process.electronBinding('v8_util');
+          const v8Util = process._linkedBinding('electron_common_v8_util');
           v8Util.requestGarbageCollectionForTesting();
         });
       });

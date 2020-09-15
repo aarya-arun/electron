@@ -49,6 +49,8 @@ gfx::Size GetExpandedWindowSize(const NativeWindow* window, gfx::Size size) {
 NativeWindow::NativeWindow(const gin_helper::Dictionary& options,
                            NativeWindow* parent)
     : widget_(new views::Widget), parent_(parent), weak_factory_(this) {
+  ++next_id_;
+
   options.Get(options::kFrame, &has_frame_);
   options.Get(options::kTransparent, &transparent_);
   options.Get(options::kEnableLargerThanScreen, &enable_larger_than_screen_);
@@ -137,7 +139,7 @@ void NativeWindow::InitFromOptions(const gin_helper::Dictionary& options) {
   bool fullscreen = false;
   if (options.Get(options::kFullscreen, &fullscreen) && !fullscreen) {
     // Disable fullscreen button if 'fullscreen' is specified to false.
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
     fullscreenable = false;
 #endif
   }
@@ -155,7 +157,7 @@ void NativeWindow::InitFromOptions(const gin_helper::Dictionary& options) {
   if (options.Get(options::kKiosk, &kiosk) && kiosk) {
     SetKiosk(kiosk);
   }
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
   std::string type;
   if (options.Get(options::kVibrancyType, &type)) {
     SetVibrancy(type);
@@ -439,6 +441,11 @@ void NativeWindow::NotifyWindowFocus() {
     observer.OnWindowFocus();
 }
 
+void NativeWindow::NotifyWindowIsKeyChanged(bool is_key) {
+  for (NativeWindowObserver& observer : observers_)
+    observer.OnWindowIsKeyChanged(is_key);
+}
+
 void NativeWindow::NotifyWindowShow() {
   for (NativeWindowObserver& observer : observers_)
     observer.OnWindowShow();
@@ -600,6 +607,9 @@ void NativeWindow::SetAccessibleTitle(const std::string& title) {
 std::string NativeWindow::GetAccessibleTitle() {
   return base::UTF16ToUTF8(accessible_title_);
 }
+
+// static
+int32_t NativeWindow::next_id_ = 0;
 
 // static
 void NativeWindowRelay::CreateForWebContents(

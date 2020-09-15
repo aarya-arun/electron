@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { globalShortcut } from 'electron';
+import { globalShortcut } from 'electron/main';
 import { ifdescribe } from './spec-helpers';
 
 ifdescribe(process.platform !== 'win32')('globalShortcut module', () => {
@@ -37,5 +37,22 @@ ifdescribe(process.platform !== 'win32')('globalShortcut module', () => {
 
     expect(globalShortcut.isRegistered(accelerators[0])).to.be.false('first unregistered');
     expect(globalShortcut.isRegistered(accelerators[1])).to.be.false('second unregistered');
+  });
+
+  it('does not crash when registering media keys as global shortcuts', () => {
+    const accelerators = [
+      'VolumeUp',
+      'VolumeDown',
+      'VolumeMute',
+      'MediaNextTrack',
+      'MediaPreviousTrack',
+      'MediaStop', 'MediaPlayPause'
+    ];
+
+    expect(() => {
+      globalShortcut.registerAll(accelerators, () => {});
+    }).to.not.throw();
+
+    globalShortcut.unregisterAll();
   });
 });

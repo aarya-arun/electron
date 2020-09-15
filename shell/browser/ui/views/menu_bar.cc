@@ -18,7 +18,7 @@
 #include "ui/views/widget/widget.h"
 
 #if defined(USE_X11)
-#include "chrome/browser/ui/gtk/gtk_util.h"
+#include "ui/gtk/gtk_util.h"
 #endif
 
 #if defined(OS_WIN)
@@ -305,7 +305,7 @@ void MenuBar::RebuildChildren() {
   RemoveAllChildViews(true);
   for (int i = 0, n = GetItemCount(); i < n; ++i) {
     auto* button =
-        new SubmenuButton(menu_model_->GetLabelAt(i), this, background_color_);
+        new SubmenuButton(this, menu_model_->GetLabelAt(i), background_color_);
     button->set_tag(i);
     AddChildView(button);
   }

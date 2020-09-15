@@ -1,8 +1,8 @@
 'use strict';
 
-import { WebContents } from 'electron';
+import { WebContents } from 'electron/main';
 
-const v8Util = process.electronBinding('v8_util');
+const v8Util = process._linkedBinding('electron_common_v8_util');
 
 const getOwnerKey = (webContents: WebContents, contextId: string) => {
   return `${webContents.id}-${contextId}`;
@@ -51,19 +51,11 @@ class ObjectsRegistry {
   // Dereference an object according to its ID.
   // Note that an object may be double-freed (cleared when page is reloaded, and
   // then garbage collected in old page).
-  // rendererSideRefCount is the ref count that the renderer process reported
-  // at time of GC if this is different to the number of references we sent to
-  // the given owner then a GC occurred between a ref being sent and the value
-  // being pulled out of the weak map.
-  // In this case we decrement out ref count and do not delete the stored
-  // object
-  // For more details on why we do renderer side ref counting see
-  // https://github.com/electron/electron/pull/17464
-  remove (webContents: WebContents, contextId: string, id: number, rendererSideRefCount: number) {
+  remove (webContents: WebContents, contextId: string, id: number) {
     const ownerKey = getOwnerKey(webContents, contextId);
     const owner = this.owners[ownerKey];
     if (owner && owner.has(id)) {
-      const newRefCount = owner.get(id)! - rendererSideRefCount;
+      const newRefCount = owner.get(id)! - 1;
 
       // Only completely remove if the number of references GCed in the
       // renderer is the same as the number of references we sent them
@@ -91,14 +83,14 @@ class ObjectsRegistry {
 
   // Private: Saves the object into storage and assigns an ID for it.
   saveToStorage (object: any) {
-    let id: number = v8Util.getHiddenValue(object, 'atomId');
+    let id: number = v8Util.getHiddenValue(object, 'electronId');
     if (!id) {
       id = ++this.nextId;
       this.storage[id] = {
         count: 0,
         object: object
       };
-      v8Util.setHiddenValue(object, 'atomId', id);
+      v8Util.setHiddenValue(object, 'electronId', id);
     }
     return id;
   }
@@ -111,7 +103,7 @@ class ObjectsRegistry {
     }
     pointer.count -= 1;
     if (pointer.count === 0) {
-      v8Util.deleteHiddenValue(pointer.object, 'atomId');
+      v8Util.deleteHiddenValue(pointer.object, 'electronId');
       delete this.storage[id];
     }
   }

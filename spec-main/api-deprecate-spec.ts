@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { deprecate } from 'electron';
+import { deprecate } from 'electron/main';
 
 describe('deprecate', () => {
   let throwing: boolean;
@@ -167,30 +167,6 @@ describe('deprecate', () => {
     expect(() => {
       deprecate.log('this is deprecated');
     }).to.throw(/this is deprecated/);
-  });
-
-  it('warns when a function is deprecated in favor of a property', () => {
-    const warnings: string[] = [];
-    deprecate.setHandler(warning => warnings.push(warning));
-
-    const newProp = 'newProp';
-    const mod: any = {
-      _oldGetterFn () { return 'getter'; },
-      _oldSetterFn () { return 'setter'; }
-    };
-
-    deprecate.fnToProperty(mod, 'newProp', '_oldGetterFn', '_oldSetterFn');
-
-    mod.oldGetterFn();
-    mod.oldSetterFn();
-
-    expect(warnings).to.have.lengthOf(2);
-
-    expect(warnings[0]).to.include('oldGetterFn');
-    expect(warnings[0]).to.include(newProp);
-
-    expect(warnings[1]).to.include('oldSetterFn');
-    expect(warnings[1]).to.include(newProp);
   });
 
   describe('moveAPI', () => {

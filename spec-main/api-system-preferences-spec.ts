@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { systemPreferences } from 'electron';
+import { systemPreferences } from 'electron/main';
 import { ifdescribe } from './spec-helpers';
 
 describe('systemPreferences module', () => {
@@ -53,7 +53,7 @@ describe('systemPreferences module', () => {
       for (const badDefault of badDefaults) {
         expect(() => {
           systemPreferences.registerDefaults(badDefault as any);
-        }).to.throw('Invalid userDefault data provided');
+        }).to.throw('Error processing argument at index 0, conversion failure from ');
       }
     });
   });
@@ -111,7 +111,7 @@ describe('systemPreferences module', () => {
 
     it('throws when type is not valid', () => {
       expect(() => {
-        systemPreferences.setUserDefault(KEY, 'abc', 'foo');
+        systemPreferences.setUserDefault(KEY, 'abc' as any, 'foo');
       }).to.throw('Invalid type: abc');
     });
   });
@@ -269,7 +269,7 @@ describe('systemPreferences module', () => {
     });
   });
 
-  ifdescribe(process.platform === 'darwin')('systemPreferences.getMediaAccessStatus(mediaType)', () => {
+  ifdescribe(['win32', 'darwin'].includes(process.platform))('systemPreferences.getMediaAccessStatus(mediaType)', () => {
     const statuses = ['not-determined', 'granted', 'denied', 'restricted', 'unknown'];
 
     it('returns an access status for a camera access request', () => {

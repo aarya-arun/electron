@@ -12,14 +12,14 @@ rendering and there is no signal from browser process on this event
 to identify it.
 
 diff --git a/content/browser/gpu/gpu_data_manager_impl.cc b/content/browser/gpu/gpu_data_manager_impl.cc
-index ba01477a3deea383f538adfe519bc53154df3321..b58f0a57e4884d87c8acc42bafc2ba86f0d1f19d 100644
+index 919ccd3f86aaecc841182de67ed94cab1008ae3d..cd9a0c9d1842daf1536b88e9d10c447ceb463d3c 100644
 --- a/content/browser/gpu/gpu_data_manager_impl.cc
 +++ b/content/browser/gpu/gpu_data_manager_impl.cc
-@@ -151,6 +151,11 @@ void GpuDataManagerImpl::OnBrowserThreadsStarted() {
+@@ -188,6 +188,11 @@ void GpuDataManagerImpl::TerminateInfoCollectionGpuProcess() {
    base::AutoLock auto_lock(lock_);
-   private_->OnBrowserThreadsStarted();
+   private_->TerminateInfoCollectionGpuProcess();
  }
-+
++  
 +bool GpuDataManagerImpl::DxdiagDx12VulkanRequested() const {
 +  base::AutoLock auto_lock(lock_);
 +  return private_->DxdiagDx12VulkanRequested();
@@ -28,40 +28,41 @@ index ba01477a3deea383f538adfe519bc53154df3321..b58f0a57e4884d87c8acc42bafc2ba86
  
  void GpuDataManagerImpl::UpdateGpuFeatureInfo(
 diff --git a/content/browser/gpu/gpu_data_manager_impl.h b/content/browser/gpu/gpu_data_manager_impl.h
-index c5515870a1dcf017b3477d890510a672e82e00e3..7848ae18cc681a3c061791166051afee49406d23 100644
+index 207e27419b1e82bfb1a59399b257b434a820d577..1aa131759978cae4cd3ee3f379282bd5bb03c1e9 100644
 --- a/content/browser/gpu/gpu_data_manager_impl.h
 +++ b/content/browser/gpu/gpu_data_manager_impl.h
-@@ -89,6 +89,7 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
-   bool Dx12VulkanRequested() const;
+@@ -95,6 +95,7 @@ class CONTENT_EXPORT GpuDataManagerImpl : public GpuDataManager,
    // Called from BrowserMainLoop::BrowserThreadsStarted().
    void OnBrowserThreadsStarted();
+   void TerminateInfoCollectionGpuProcess();
 +  bool DxdiagDx12VulkanRequested() const;
  #endif
-   // Update the GPU feature info. This updates the blacklist and enabled status
+   // Update the GPU feature info. This updates the blocklist and enabled status
    // of GPU rasterization. In the future this will be used for more features.
 diff --git a/content/browser/gpu/gpu_data_manager_impl_private.cc b/content/browser/gpu/gpu_data_manager_impl_private.cc
-index aae01a85f5d37d4c8e809815540662dee1550dbc..ee05d2fb8524664d2e989779201a670a201dd8bb 100644
+index 6f93628f837950cc9af5ca09179a1894c0b215ad..4c70fd640a7a2c75894826552649f46a49223c87 100644
 --- a/content/browser/gpu/gpu_data_manager_impl_private.cc
 +++ b/content/browser/gpu/gpu_data_manager_impl_private.cc
-@@ -896,6 +896,10 @@ void GpuDataManagerImplPrivate::OnBrowserThreadsStarted() {
-     display::Screen::GetScreen()->AddObserver(owner_);
+@@ -1060,6 +1060,11 @@ void GpuDataManagerImplPrivate::TerminateInfoCollectionGpuProcess() {
+     host->ForceShutdown();
  }
  
 +bool GpuDataManagerImplPrivate::DxdiagDx12VulkanRequested() const {
-+  return !(gpu_info_dx12_vulkan_request_failed_ ||
++  return !(gpu_info_vulkan_request_failed_ ||
++           gpu_info_dx12_request_failed_ ||
 +           gpu_info_dx_diag_request_failed_);
 +}
  #endif
  
  void GpuDataManagerImplPrivate::UpdateGpuFeatureInfo(
 diff --git a/content/browser/gpu/gpu_data_manager_impl_private.h b/content/browser/gpu/gpu_data_manager_impl_private.h
-index 6a082f73e77d9f5e7630cc4dbc18188c7e565c0b..d880de03d168908f2f7d4bc0c65e18e283de0005 100644
+index 18f1d94764048b19a53b68622ea2f133ccf4c11b..1e6230534a85ccd23736a73f7285a5fed6ad7f0d 100644
 --- a/content/browser/gpu/gpu_data_manager_impl_private.h
 +++ b/content/browser/gpu/gpu_data_manager_impl_private.h
-@@ -71,6 +71,7 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
-   void UpdateDxDiagNodeRequestStatus(bool request_continues);
-   bool Dx12VulkanRequested() const;
+@@ -75,6 +75,7 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
+   bool VulkanRequested() const;
    void OnBrowserThreadsStarted();
+   void TerminateInfoCollectionGpuProcess();
 +  bool DxdiagDx12VulkanRequested() const;
  #endif
    void UpdateGpuFeatureInfo(const gpu::GpuFeatureInfo& gpu_feature_info,

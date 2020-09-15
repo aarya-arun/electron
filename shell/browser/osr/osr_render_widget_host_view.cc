@@ -57,22 +57,22 @@ const float kDefaultScaleFactor = 1.0;
 ui::MouseEvent UiMouseEventFromWebMouseEvent(blink::WebMouseEvent event) {
   ui::EventType type = ui::EventType::ET_UNKNOWN;
   switch (event.GetType()) {
-    case blink::WebInputEvent::kMouseDown:
+    case blink::WebInputEvent::Type::kMouseDown:
       type = ui::EventType::ET_MOUSE_PRESSED;
       break;
-    case blink::WebInputEvent::kMouseUp:
+    case blink::WebInputEvent::Type::kMouseUp:
       type = ui::EventType::ET_MOUSE_RELEASED;
       break;
-    case blink::WebInputEvent::kMouseMove:
+    case blink::WebInputEvent::Type::kMouseMove:
       type = ui::EventType::ET_MOUSE_MOVED;
       break;
-    case blink::WebInputEvent::kMouseEnter:
+    case blink::WebInputEvent::Type::kMouseEnter:
       type = ui::EventType::ET_MOUSE_ENTERED;
       break;
-    case blink::WebInputEvent::kMouseLeave:
+    case blink::WebInputEvent::Type::kMouseLeave:
       type = ui::EventType::ET_MOUSE_EXITED;
       break;
-    case blink::WebInputEvent::kMouseWheel:
+    case blink::WebInputEvent::Type::kMouseWheel:
       type = ui::EventType::ET_MOUSEWHEEL;
       break;
     default:
@@ -138,7 +138,7 @@ class ElectronDelegatedFrameHostClient
 
   SkColor DelegatedFrameHostGetGutterColor() const override {
     if (view_->render_widget_host()->delegate() &&
-        view_->render_widget_host()->delegate()->IsFullscreenForCurrentTab()) {
+        view_->render_widget_host()->delegate()->IsFullscreen()) {
       return SK_ColorWHITE;
     }
     return *view_->GetBackgroundColor();
@@ -222,7 +222,6 @@ OffScreenRenderWidgetHostView::OffScreenRenderWidgetHostView(
 
   ResizeRootLayer(false);
   render_widget_host_->SetView(this);
-  InstallTransparency();
 
   if (content::GpuDataManager::GetInstance()->HardwareAccelerationEnabled()) {
     video_consumer_ = std::make_unique<OffScreenVideoConsumer>(
@@ -437,7 +436,7 @@ content::CursorManager* OffScreenRenderWidgetHostView::GetCursorManager() {
 void OffScreenRenderWidgetHostView::SetIsLoading(bool loading) {}
 
 void OffScreenRenderWidgetHostView::TextInputStateChanged(
-    const content::TextInputState& params) {}
+    const ui::mojom::TextInputState& params) {}
 
 void OffScreenRenderWidgetHostView::ImeCancelComposition() {}
 
@@ -488,13 +487,13 @@ void OffScreenRenderWidgetHostView::CopyFromSurface(
 }
 
 void OffScreenRenderWidgetHostView::GetScreenInfo(
-    content::ScreenInfo* screen_info) {
+    blink::ScreenInfo* screen_info) {
   screen_info->depth = 24;
   screen_info->depth_per_component = 8;
   screen_info->orientation_angle = 0;
   screen_info->device_scale_factor = current_device_scale_factor_;
   screen_info->orientation_type =
-      content::SCREEN_ORIENTATION_VALUES_LANDSCAPE_PRIMARY;
+      blink::mojom::ScreenOrientation::kLandscapePrimary;
   screen_info->rect = gfx::Rect(size_);
   screen_info->available_rect = gfx::Rect(size_);
 }
@@ -640,12 +639,15 @@ bool OffScreenRenderWidgetHostView::InstallTransparency() {
   return false;
 }
 
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
 void OffScreenRenderWidgetHostView::SetActive(bool active) {}
 
 void OffScreenRenderWidgetHostView::ShowDefinitionForSelection() {}
 
 void OffScreenRenderWidgetHostView::SpeakSelection() {}
+
+void OffScreenRenderWidgetHostView::SetWindowFrameInScreen(
+    const gfx::Rect& rect) {}
 
 bool OffScreenRenderWidgetHostView::UpdateNSViewAndDisplay() {
   return false;

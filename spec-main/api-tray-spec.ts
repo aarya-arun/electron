@@ -1,5 +1,6 @@
 import { expect } from 'chai';
-import { Menu, Tray, nativeImage } from 'electron';
+import { Menu, Tray } from 'electron/main';
+import { nativeImage } from 'electron/common';
 import { ifdescribe, ifit } from './spec-helpers';
 import * as path from 'path';
 
@@ -18,7 +19,7 @@ describe('tray module', () => {
       const badPath = path.resolve('I', 'Do', 'Not', 'Exist');
       expect(() => {
         tray = new Tray(badPath);
-      }).to.throw(/Image could not be created from .*/);
+      }).to.throw(/Error processing argument at index 0/);
     });
 
     ifit(process.platform === 'win32')('throws a descriptive error if an invlaid guid is given', () => {
@@ -31,6 +32,10 @@ describe('tray module', () => {
       expect(() => {
         tray = new Tray(nativeImage.createEmpty(), '0019A433-3526-48BA-A66C-676742C0FEFB');
       }).to.not.throw();
+    });
+
+    it('is an instance of Tray', () => {
+      expect(tray).to.be.an.instanceOf(Tray);
     });
   });
 
@@ -72,6 +77,36 @@ describe('tray module', () => {
         done();
       });
       tray.popUpContextMenu();
+    });
+
+    it('can be called with a menu', () => {
+      const menu = Menu.buildFromTemplate([{ label: 'Test' }]);
+      expect(() => {
+        tray.popUpContextMenu(menu);
+      }).to.not.throw();
+    });
+
+    it('can be called with a position', () => {
+      expect(() => {
+        tray.popUpContextMenu({ x: 0, y: 0 } as any);
+      }).to.not.throw();
+    });
+
+    it('can be called with a menu and a position', () => {
+      const menu = Menu.buildFromTemplate([{ label: 'Test' }]);
+      expect(() => {
+        tray.popUpContextMenu(menu, { x: 0, y: 0 });
+      }).to.not.throw();
+    });
+
+    it('throws an error on invalid arguments', () => {
+      expect(() => {
+        tray.popUpContextMenu({} as any);
+      }).to.throw(/index 0/);
+      const menu = Menu.buildFromTemplate([{ label: 'Test' }]);
+      expect(() => {
+        tray.popUpContextMenu(menu, {} as any);
+      }).to.throw(/index 1/);
     });
   });
 
@@ -123,6 +158,37 @@ describe('tray module', () => {
       const newTitle = tray.getTitle();
 
       expect(newTitle).to.equal(title);
+    });
+
+    it('can have an options object passed in', () => {
+      expect(() => {
+        tray.setTitle('Hello World!', {});
+      }).to.not.throw();
+    });
+
+    it('throws when the options parameter is not an object', () => {
+      expect(() => {
+        tray.setTitle('Hello World!', 'test' as any);
+      }).to.throw(/setTitle options must be an object/);
+    });
+
+    it('can have a font type option set', () => {
+      expect(() => {
+        tray.setTitle('Hello World!', { fontType: 'monospaced' });
+        tray.setTitle('Hello World!', { fontType: 'monospacedDigit' });
+      }).to.not.throw();
+    });
+
+    it('throws when the font type is specified but is not a string', () => {
+      expect(() => {
+        tray.setTitle('Hello World!', { fontType: 5.4 as any });
+      }).to.throw(/fontType must be one of 'monospaced' or 'monospacedDigit'/);
+    });
+
+    it('throws on invalid font types', () => {
+      expect(() => {
+        tray.setTitle('Hello World!', { fontType: 'blep' as any });
+      }).to.throw(/fontType must be one of 'monospaced' or 'monospacedDigit'/);
     });
   });
 });

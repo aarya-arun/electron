@@ -118,7 +118,8 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
   void SetOverlayIcon(const gfx::Image& overlay,
                       const std::string& description) override;
 
-  void SetVisibleOnAllWorkspaces(bool visible) override;
+  void SetVisibleOnAllWorkspaces(bool visible,
+                                 bool visibleOnFullScreen) override;
   bool IsVisibleOnAllWorkspaces() override;
 
   void SetAutoHideCursor(bool auto_hide) override;
@@ -151,11 +152,17 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
   void SetWindowLevel(int level);
 
   // Custom traffic light positioning
-  void RedrawTrafficLights();
+  void RedrawTrafficLights() override;
   void SetExitingFullScreen(bool flag);
   void SetTrafficLightPosition(const gfx::Point& position) override;
   gfx::Point GetTrafficLightPosition() const override;
   void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;
+
+  enum class VisualEffectState {
+    FOLLOW_WINDOW,
+    ACTIVE,
+    INACTIVE,
+  };
 
   enum class TitleBarStyle {
     NORMAL,
@@ -217,6 +224,9 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
 
   // The "titleBarStyle" option.
   TitleBarStyle title_bar_style_ = TitleBarStyle::NORMAL;
+
+  // The "visualEffectState" option.
+  VisualEffectState visual_effect_state_ = VisualEffectState::FOLLOW_WINDOW;
 
   // The visibility mode of window button controls when explicitly set through
   // setWindowButtonVisibility().

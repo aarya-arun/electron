@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/predictors/preconnect_manager.h"
 #include "content/public/browser/browser_context.h"
@@ -47,10 +46,10 @@ class CookieChangeNotifier;
 class ResolveProxyHelper;
 class SpecialStoragePolicy;
 class WebViewManager;
+class ProtocolRegistry;
 
 class ElectronBrowserContext
-    : public base::RefCountedDeleteOnSequence<ElectronBrowserContext>,
-      public content::BrowserContext,
+    : public content::BrowserContext,
       public network::mojom::TrustedURLLoaderAuthClient {
  public:
   // partition_id => browser_context
@@ -72,19 +71,17 @@ class ElectronBrowserContext
     }
   };
   using BrowserContextMap =
-      std::map<PartitionKey, base::WeakPtr<ElectronBrowserContext>>;
+      std::map<PartitionKey, std::unique_ptr<ElectronBrowserContext>>;
 
   // Get or create the BrowserContext according to its |partition| and
   // |in_memory|. The |options| will be passed to constructor when there is no
   // existing BrowserContext.
-  static scoped_refptr<ElectronBrowserContext> From(
+  static ElectronBrowserContext* From(
       const std::string& partition,
       bool in_memory,
       base::DictionaryValue options = base::DictionaryValue());
 
-  static BrowserContextMap browser_context_map() {
-    return browser_context_map_;
-  }
+  static BrowserContextMap& browser_context_map();
 
   void SetUserAgent(const std::string& user_agent);
   std::string GetUserAgent() const;
@@ -139,19 +136,23 @@ class ElectronBrowserContext
 
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
   extensions::ElectronExtensionSystem* extension_system() {
+    // Guard usages of extension_system() with !IsOffTheRecord()
+    // There is no extension system for in-memory sessions
+    DCHECK(!IsOffTheRecord());
     return extension_system_;
   }
 #endif
 
- protected:
-  ElectronBrowserContext(const std::string& partition,
-                         bool in_memory,
-                         base::DictionaryValue options);
+  ProtocolRegistry* protocol_registry() const {
+    return protocol_registry_.get();
+  }
+
   ~ElectronBrowserContext() override;
 
  private:
-  friend class base::RefCountedDeleteOnSequence<ElectronBrowserContext>;
-  friend class base::DeleteHelper<ElectronBrowserContext>;
+  ElectronBrowserContext(const std::string& partition,
+                         bool in_memory,
+                         base::DictionaryValue options);
 
   void OnLoaderCreated(int32_t request_id,
                        mojo::PendingReceiver<network::mojom::TrustedAuthClient>
@@ -159,8 +160,6 @@ class ElectronBrowserContext
 
   // Initialize pref registry.
   void InitPrefs();
-
-  static BrowserContextMap browser_context_map_;
 
   ValueMapPrefStore* in_memory_pref_store_;
 
@@ -173,8 +172,8 @@ class ElectronBrowserContext
   std::unique_ptr<MediaDeviceIDSalt> media_device_id_salt_;
   scoped_refptr<ResolveProxyHelper> resolve_proxy_helper_;
   scoped_refptr<storage::SpecialStoragePolicy> storage_policy_;
-
   std::unique_ptr<predictors::PreconnectManager> preconnect_manager_;
+  std::unique_ptr<ProtocolRegistry> protocol_registry_;
 
   std::string user_agent_;
   base::FilePath path_;

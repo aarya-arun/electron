@@ -1,4 +1,4 @@
-import { BrowserWindow, app, Menu, MenuItem, MenuItemConstructorOptions } from 'electron';
+import { BrowserWindow, app, Menu, MenuItem, MenuItemConstructorOptions } from 'electron/main';
 import { expect } from 'chai';
 import { closeAllWindows } from './window-helpers';
 const { roleList, execute } = require('../lib/browser/api/menu-item-roles');
@@ -43,12 +43,16 @@ describe('MenuItems', () => {
       const menu = Menu.buildFromTemplate([{
         label: 'text',
         click: (item) => {
-          expect(item.constructor.name).to.equal('MenuItem');
-          expect(item.label).to.equal('text');
-          done();
+          try {
+            expect(item.constructor.name).to.equal('MenuItem');
+            expect(item.label).to.equal('text');
+            done();
+          } catch (e) {
+            done(e);
+          }
         }
       }]);
-      menu.delegate.executeCommand(menu, {}, menu.items[0].commandId);
+      menu._executeCommand({}, menu.items[0].commandId);
     });
   });
 
@@ -60,7 +64,7 @@ describe('MenuItems', () => {
       }]);
 
       expect(menu.items[0].checked).to.be.false('menu item checked');
-      menu.delegate.executeCommand(menu, {}, menu.items[0].commandId);
+      menu._executeCommand({}, menu.items[0].commandId);
       expect(menu.items[0].checked).to.be.true('menu item checked');
     });
 
@@ -70,9 +74,9 @@ describe('MenuItems', () => {
         type: 'radio'
       }]);
 
-      menu.delegate.executeCommand(menu, {}, menu.items[0].commandId);
+      menu._executeCommand({}, menu.items[0].commandId);
       expect(menu.items[0].checked).to.be.true('menu item checked');
-      menu.delegate.executeCommand(menu, {}, menu.items[0].commandId);
+      menu._executeCommand({}, menu.items[0].commandId);
       expect(menu.items[0].checked).to.be.true('menu item checked');
     });
 
@@ -123,7 +127,7 @@ describe('MenuItems', () => {
 
       it('at least have one item checked in each group', () => {
         const menu = Menu.buildFromTemplate(template);
-        menu.delegate.menuWillShow(menu);
+        menu._menuWillShow();
 
         const groups = findRadioGroups(template);
 

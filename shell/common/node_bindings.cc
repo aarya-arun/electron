@@ -24,21 +24,27 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_paths.h"
 #include "electron/buildflags/buildflags.h"
+#include "shell/common/api/electron_bindings.h"
 #include "shell/common/electron_command_line.h"
 #include "shell/common/gin_converters/file_path_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/event_emitter_caller.h"
 #include "shell/common/gin_helper/locker.h"
+#include "shell/common/gin_helper/microtasks_scope.h"
 #include "shell/common/mac/main_application_bundle.h"
 #include "shell/common/node_includes.h"
+
+#if !defined(MAS_BUILD)
+#include "shell/common/crash_keys.h"
+#endif
 
 #define ELECTRON_BUILTIN_MODULES(V)      \
   V(electron_browser_app)                \
   V(electron_browser_auto_updater)       \
   V(electron_browser_browser_view)       \
   V(electron_browser_content_tracing)    \
+  V(electron_browser_crash_reporter)     \
   V(electron_browser_dialog)             \
-  V(electron_browser_download_item)      \
   V(electron_browser_event)              \
   V(electron_browser_event_emitter)      \
   V(electron_browser_global_shortcut)    \
@@ -51,17 +57,16 @@
   V(electron_browser_protocol)           \
   V(electron_browser_session)            \
   V(electron_browser_system_preferences) \
-  V(electron_browser_top_level_window)   \
+  V(electron_browser_base_window)        \
   V(electron_browser_tray)               \
+  V(electron_browser_view)               \
   V(electron_browser_web_contents)       \
   V(electron_browser_web_contents_view)  \
-  V(electron_browser_view)               \
   V(electron_browser_web_view_manager)   \
   V(electron_browser_window)             \
   V(electron_common_asar)                \
   V(electron_common_clipboard)           \
   V(electron_common_command_line)        \
-  V(electron_common_crash_reporter)      \
   V(electron_common_features)            \
   V(electron_common_native_image)        \
   V(electron_common_native_theme)        \
@@ -70,17 +75,11 @@
   V(electron_common_shell)               \
   V(electron_common_v8_util)             \
   V(electron_renderer_context_bridge)    \
+  V(electron_renderer_crash_reporter)    \
   V(electron_renderer_ipc)               \
   V(electron_renderer_web_frame)
 
-#define ELECTRON_VIEW_MODULES(V)     \
-  V(electron_browser_box_layout)     \
-  V(electron_browser_button)         \
-  V(electron_browser_label_button)   \
-  V(electron_browser_layout_manager) \
-  V(electron_browser_md_text_button) \
-  V(electron_browser_resize_area)    \
-  V(electron_browser_text_field)
+#define ELECTRON_VIEWS_MODULES(V) V(electron_browser_image_view)
 
 #define ELECTRON_DESKTOP_CAPTURER_MODULE(V) V(electron_browser_desktop_capturer)
 
@@ -91,8 +90,8 @@
 // implementation when calling the NODE_LINKED_MODULE_CONTEXT_AWARE.
 #define V(modname) void _register_##modname();
 ELECTRON_BUILTIN_MODULES(V)
-#if BUILDFLAG(ENABLE_VIEW_API)
-ELECTRON_VIEW_MODULES(V)
+#if BUILDFLAG(ENABLE_VIEWS_API)
+ELECTRON_VIEWS_MODULES(V)
 #endif
 #if BUILDFLAG(ENABLE_DESKTOP_CAPTURER)
 ELECTRON_DESKTOP_CAPTURER_MODULE(V)
@@ -102,25 +101,27 @@ ELECTRON_DESKTOP_CAPTURER_MODULE(V)
 namespace {
 
 void stop_and_close_uv_loop(uv_loop_t* loop) {
-  // Close any active handles
   uv_stop(loop);
-  uv_walk(
-      loop,
-      [](uv_handle_t* handle, void*) {
-        if (!uv_is_closing(handle)) {
-          uv_close(handle, nullptr);
-        }
-      },
-      nullptr);
 
-  // Run the loop to let it finish all the closing handles
-  // NB: after uv_stop(), uv_run(UV_RUN_DEFAULT) returns 0 when that's done
+  auto const ensure_closing = [](uv_handle_t* handle, void*) {
+    // We should be using the UvHandle wrapper everywhere, in which case
+    // all handles should already be in a closing state...
+    DCHECK(uv_is_closing(handle));
+    // ...but if a raw handle got through, through, do the right thing anyway
+    if (!uv_is_closing(handle)) {
+      uv_close(handle, nullptr);
+    }
+  };
+
+  uv_walk(loop, ensure_closing, nullptr);
+
+  // All remaining handles are in a closing state now.
+  // Pump the event loop so that they can finish closing.
   for (;;)
-    if (!uv_run(loop, UV_RUN_DEFAULT))
+    if (uv_run(loop, UV_RUN_DEFAULT) == 0)
       break;
 
-  DCHECK(!uv_loop_alive(loop));
-  uv_loop_close(loop);
+  DCHECK_EQ(0, uv_loop_alive(loop));
 }
 
 bool g_is_initialized = false;
@@ -136,6 +137,18 @@ bool IsPackagedApp() {
 #else
   return base_name != FILE_PATH_LITERAL("electron");
 #endif
+}
+
+void V8FatalErrorCallback(const char* location, const char* message) {
+  LOG(ERROR) << "Fatal error in V8: " << location << " " << message;
+
+#if !defined(MAS_BUILD)
+  electron::crash_keys::SetCrashKey("electron.v8-fatal.message", message);
+  electron::crash_keys::SetCrashKey("electron.v8-fatal.location", location);
+#endif
+
+  volatile int* zero = nullptr;
+  *zero = 0;
 }
 
 // Initialize Node.js cli options to pass to Node.js
@@ -246,7 +259,7 @@ std::unique_ptr<const char* []> StringVectorToArgArray(
 }
 
 base::FilePath GetResourcesPath() {
-#if defined(OS_MACOSX)
+#if defined(OS_MAC)
   return MainApplicationBundlePath().Append("Contents").Append("Resources");
 #else
   auto* command_line = base::CommandLine::ForCurrentProcess();
@@ -273,6 +286,7 @@ NodeBindings::~NodeBindings() {
   // Quit the embed thread.
   embed_closed_ = true;
   uv_sem_post(&embed_sem_);
+
   WakeupEmbedThread();
 
   // Wait for everything to be done.
@@ -280,18 +294,18 @@ NodeBindings::~NodeBindings() {
 
   // Clear uv.
   uv_sem_destroy(&embed_sem_);
-  uv_close(reinterpret_cast<uv_handle_t*>(&dummy_uv_handle_), nullptr);
+  dummy_uv_handle_.reset();
 
   // Clean up worker loop
-  if (uv_loop_ == &worker_loop_)
+  if (in_worker_loop())
     stop_and_close_uv_loop(uv_loop_);
 }
 
 void NodeBindings::RegisterBuiltinModules() {
 #define V(modname) _register_##modname();
   ELECTRON_BUILTIN_MODULES(V)
-#if BUILDFLAG(ENABLE_VIEW_API)
-  ELECTRON_VIEW_MODULES(V)
+#if BUILDFLAG(ENABLE_VIEWS_API)
+  ELECTRON_VIEWS_MODULES(V)
 #endif
 #if BUILDFLAG(ENABLE_DESKTOP_CAPTURER)
   ELECTRON_DESKTOP_CAPTURER_MODULE(V)
@@ -306,7 +320,6 @@ bool NodeBindings::IsInitialized() {
 void NodeBindings::Initialize() {
   TRACE_EVENT0("electron", "NodeBindings::Initialize");
   // Open node's error reporting system for browser process.
-  node::g_standalone_mode = browser_env_ == BrowserEnvironment::BROWSER;
   node::g_upstream_node_mode = false;
 
 #if defined(OS_LINUX)
@@ -389,9 +402,24 @@ node::Environment* NodeBindings::CreateEnvironment(
   std::unique_ptr<const char*[]> c_argv = StringVectorToArgArray(args);
   isolate_data_ =
       node::CreateIsolateData(context->GetIsolate(), uv_loop_, platform);
-  node::Environment* env = node::CreateEnvironment(
-      isolate_data_, context, args.size(), c_argv.get(), 0, nullptr);
-  DCHECK(env);
+
+  node::Environment* env;
+  if (browser_env_ != BrowserEnvironment::BROWSER) {
+    v8::TryCatch try_catch(context->GetIsolate());
+    env = node::CreateEnvironment(isolate_data_, context, args.size(),
+                                  c_argv.get(), 0, nullptr);
+    DCHECK(env);
+    // This will only be caught when something has gone terrible wrong as all
+    // electron scripts are wrapped in a try {} catch {} in run-compiler.js
+    if (try_catch.HasCaught()) {
+      LOG(ERROR) << "Failed to initialize node environment in process: "
+                 << process_type;
+    }
+  } else {
+    env = node::CreateEnvironment(isolate_data_, context, args.size(),
+                                  c_argv.get(), 0, nullptr);
+    DCHECK(env);
+  }
 
   // Clean up the global _noBrowserGlobals that we unironically injected into
   // the global scope
@@ -401,15 +429,35 @@ node::Environment* NodeBindings::CreateEnvironment(
     global.Delete("_noBrowserGlobals");
   }
 
+  node::IsolateSettings is;
+
+  // Use a custom fatal error callback to allow us to add
+  // crash message and location to CrashReports.
+  is.fatal_error_callback = V8FatalErrorCallback;
+
   if (browser_env_ == BrowserEnvironment::BROWSER) {
-    // SetAutorunMicrotasks is no longer called in node::CreateEnvironment
-    // so instead call it here to match expected node behavior
-    context->GetIsolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
+    // Node.js requires that microtask checkpoints be explicitly invoked.
+    is.policy = v8::MicrotasksPolicy::kExplicit;
   } else {
-    // Node uses the deprecated SetAutorunMicrotasks(false) mode, we should
-    // switch to use the scoped policy to match blink's behavior.
-    context->GetIsolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kScoped);
+    // Match Blink's behavior by allowing microtasks invocation to be controlled
+    // by MicrotasksScope objects.
+    is.policy = v8::MicrotasksPolicy::kScoped;
+
+    // We do not want to use Node.js' message listener as it interferes with
+    // Blink's.
+    is.flags &= ~node::IsolateSettingsFlags::MESSAGE_LISTENER_WITH_ERROR_LEVEL;
+
+    // We do not want to use the promise rejection callback that Node.js uses,
+    // because it does not send PromiseRejectionEvents to the global script
+    // context. We need to use the one Blink already provides.
+    is.flags &=
+        ~node::IsolateSettingsFlags::SHOULD_SET_PROMISE_REJECTION_CALLBACK;
   }
+
+  // This needs to be called before the inspector is initialized.
+  env->InitializeDiagnostics();
+
+  node::SetIsolateUpForNode(context->GetIsolate(), is);
 
   gin_helper::Dictionary process(context->GetIsolate(), env->process_object());
   process.SetReadOnly("type", process_type);
@@ -430,7 +478,7 @@ void NodeBindings::LoadEnvironment(node::Environment* env) {
 void NodeBindings::PrepareMessageLoop() {
   // Add dummy handle for libuv, otherwise libuv would quit when there is
   // nothing to do.
-  uv_async_init(uv_loop_, &dummy_uv_handle_, nullptr);
+  uv_async_init(uv_loop_, dummy_uv_handle_.get(), nullptr);
 
   // Start worker that will interrupt main loop when having uv events.
   uv_sem_init(&embed_sem_, 0);
@@ -462,8 +510,7 @@ void NodeBindings::UvRunOnce() {
   v8::Context::Scope context_scope(env->context());
 
   // Perform microtask checkpoint after running JavaScript.
-  v8::MicrotasksScope script_scope(env->isolate(),
-                                   v8::MicrotasksScope::kRunMicrotasks);
+  gin_helper::MicrotasksScope microtasks_scope(env->isolate());
 
   if (browser_env_ != BrowserEnvironment::BROWSER)
     TRACE_EVENT_BEGIN0("devtools.timeline", "FunctionCall");
@@ -488,7 +535,7 @@ void NodeBindings::WakeupMainThread() {
 }
 
 void NodeBindings::WakeupEmbedThread() {
-  uv_async_send(&dummy_uv_handle_);
+  uv_async_send(dummy_uv_handle_.get());
 }
 
 // static

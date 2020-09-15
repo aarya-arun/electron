@@ -3,12 +3,9 @@
 from __future__ import print_function
 import atexit
 import contextlib
-import datetime
 import errno
 import json
 import os
-import platform
-import re
 import shutil
 import ssl
 import stat
@@ -23,8 +20,7 @@ except ImportError:
   from urllib2 import urlopen
 import zipfile
 
-from lib.config import is_verbose_mode, PLATFORM
-from lib.env_util import get_vs_env
+from lib.config import is_verbose_mode
 
 ELECTRON_DIR = os.path.abspath(
   os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -268,14 +264,3 @@ def get_buildtools_executable(name):
   if sys.platform == 'win32':
     path += '.exe'
   return path
-
-def get_objcopy_path(target_cpu):
-  if PLATFORM != 'linux':
-    raise Exception(
-      "get_objcopy_path: unexpected platform '{0}'".format(PLATFORM))
-
-  if target_cpu != 'x64':
-      raise Exception(
-      "get_objcopy_path: unexpected target cpu '{0}'".format(target_cpu))
-  return os.path.join(SRC_DIR, 'third_party', 'binutils', 'Linux_x64',
-                        'Release', 'bin', 'objcopy')
